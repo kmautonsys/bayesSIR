@@ -72,7 +72,7 @@ fit <- stan(
   cores = 4               # number of cores (could use one per chain)
 )
 
-probs = c(0.25) # posterior percentiles
+probs0 = c(0.25) # posterior percentiles
 probs = c(probs0,0.5,rev(1-probs0))
 
 if(N>0){
