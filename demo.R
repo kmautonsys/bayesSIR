@@ -1,5 +1,5 @@
 #####################################################################
-# Copyright 2020 Auton Systems LLC 
+# Copyright 2020 AutonSystems, LLC
 #
 # Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 #
@@ -95,7 +95,7 @@ colnames(posteriorI)[ncol(posteriorI)] = "t"
 ####
 df = as.data.frame(posteriorI)
 # have to deal with the bad names from the summary 
-names(df)[names(df)%in%paste0(probs*100,"%")]=c(paste0("c",1:length(probs0),"l"),"c50",rev(paste0("c",1:length(probs0),"u")))
+names(df)[names(df)%in%paste0(probs*100,"%")]=c(paste0("c",probs0*100,"l"),"c50",rev(paste0("c",probs0*100,"u")))
 # convert to % of total population
 df[,colnames(df)!="t"] = df[,colnames(df)!="t"]/data$TotalPop*100
 
