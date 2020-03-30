@@ -56,8 +56,8 @@ data = list(
   dat_cases=array(dat_cases,Q),
   TotalPop=TotalPop,
   datSD = 1000,
-  SevereMU = 0,
-  SevereSD = 2
+  ConfirmMU = 0,
+  ConfirmSD = 2
 )
 
 fit <- stan(
