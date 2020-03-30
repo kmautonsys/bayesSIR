@@ -107,7 +107,7 @@ data {
   // Historical data
   int<lower=0> Q; // number of observations
   real<upper=0> dat_ts[Q]; // time-stamps for historical data
-  real<lower=0> dat_cases[Q]; // number of infections at times dat_ts
+  int<lower=0> dat_cases[Q]; // number of infections at times dat_ts
   real<lower=0> datSD; // confidence in data
   
 }
@@ -124,6 +124,17 @@ transformed data {
   real dat_ts_[Q+M-1]; // time-stamps to get backward solution for SIR ODE
   int dat_ts_is_output[Q+M-1]; // flag identifying if an endpoint is also a data time-stamp
   int dat_endpts[M]; // endpoints of piece-wise periods
+  
+  int delta_cases[Q];
+
+  // compute delta cases
+  {// local variables
+  int a=0;
+  for(l in 1:Q){
+    delta_cases[l] = dat_cases[l]-a;
+    a = dat_cases[l];
+  }
+  }
   
   // Fill forward ODE time stamps
   if( N>0 ){// local variables
@@ -217,10 +228,13 @@ model {
   // back-cast initial conditions, and compare with observed data
   if( Q>0 ){
     real dat_I[Q,3];
+    real a = TotalPop;
     dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
     
     for(i in 1:Q){
-      dat_cases[i] ~ normal( inv_logit(ConfirmProportion)*( TotalPop-dat_I[i,2]) ,datSD);
+      real lambda = inv_logit(ConfirmProportion)*(a-dat_I[i,2]);
+      delta_cases[i] ~ normal( lambda ,sqrt(abs(lambda))+datSD);
+      a = dat_I[i,2];
     }
   }
   
