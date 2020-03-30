@@ -25,6 +25,9 @@ Bayesian data fusion and forecasting for contagious disease.
 
 This is a data driven Bayesian forecasting model for contagious disease. It is written in stan, with a front end in R. It can use available data to estimate outbreak parameters, forecast future infections, and give uncertainty estimates of current and future infections.
 
+v1.x uses only the number of confirmed cases to infer outbreak parameters.
+v2.x uses both the number of confirmed cases and the number tests.
+
 The basic parameters are:
 - Infected Population
 - Recovered Population
@@ -58,7 +61,7 @@ The expected input data for the stan script is:
   // Historical data
   int Q; // number of observations
   rea dat_ts[Q]; // time-stamps for historical data
-  real dat_tests[Q]; // unused
+  real dat_tests[Q]; // Used in v2.x
   real dat_cases[Q]; // number of infections at times dat_ts
   real datSD; // confidence in data
   
