@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////////
-// Copyright 2020 Auton Systems LLC 
+// Copyright 2020 AutonSystems, LLC
 //
 // Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 //
@@ -16,26 +16,20 @@ functions {
 
   real[] SIR(real t,real[] y,real[] theta,real[] x_r,int[] x_i) {
     real dydt[1];
-    real hack = 0; 
     real gamma = theta[1];
     real beta = theta[2];
-    real C0 = theta[3];
-    if(y[1]>=0) hack = lmultiply(y[1],y[1]);
-    dydt[1] = -gamma*hack+beta*y[1]*y[1]-beta*C0*y[1]; // lmultiply(y,y) = y*log(y)
+    dydt[1] = -gamma*y[1]+beta*exp(y[1])-beta;
     return dydt;
   }
 
   real[,] Forecast(real I0, real R0, data real[] ts, data int[] endpts, data int[] ts_is_output, real gamma, real[] beta, data real TotalPop, data real[] x_r, data int[] x_i, data int M, data int N, real time_reverse){
-    real I[N,1];
-    real I0_;
-    real C0;
+    real I[N,3];
     real S0;
-    real theta[3];
+    real theta[2];
     real y0[1];
     int j;
     
     theta[1] = time_reverse*gamma;
-    I0_ = I0;
     S0 = TotalPop - I0 - R0;
     j = 1;
     for(i in 1:M){
@@ -47,33 +41,38 @@ functions {
       real beta_ = beta[time_reverse>0 ? i : M-i+1];
       int P = i>1 ? endpts[i]-endpts[i-1] : endpts[i];
       real S[P,1];
-      C0 = I0_+S0-gamma/beta_*TotalPop*log(S0);
-      theta[2] = time_reverse*beta_/TotalPop;
-      theta[3] = C0;
-      y0[1] = S0;
+      theta[2] = time_reverse*beta_;
+      y0[1] = log(S0/TotalPop);
       if(i==1){
-        S = integrate_ode_rk45(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
       } else if(ts[endpts[i-1]]<0) {
-        S = integrate_ode_rk45(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       } else {
-        S = integrate_ode_rk45(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       }
       for( k in 1:P ){
         int kk = i>1 ? endpts[i-1] : 0;
         if( ts_is_output[kk+k]==0) continue;
-        I[j,1] = gamma/beta_*TotalPop*log(S[k,1])-S[k,1]+C0;
+        I[j,2] = TotalPop*exp(S[k,1]); // Susceptible population
+        I[j,1] = gamma/beta_*TotalPop*S[k,1]-I[j,2]+TotalPop; // Infected population
+        I[j,3] = TotalPop - (I[j,2] + I[j,1]); // Recovered population
         j = j + 1;
       }
-      S0 = S[P,1];
-      I0_ = gamma/beta_*TotalPop*log(S0)-S0+C0;
+      S0 = TotalPop*exp(S[P,1]);
       }
     }
     if( time_reverse<0 ){ // flip time back
       int N2 = N/2;
       for( i in 1:N2 ){
         real v = I[i,1];
+        real w = I[i,2];
+        real z = I[i,3];
         I[i,1] = I[N-i+1,1];
+        I[i,2] = I[N-i+1,2];
+        I[i,3] = I[N-i+1,3];
         I[N-i+1,1] = v;
+        I[N-i+1,2] = w;
+        I[N-i+1,3] = z;
       }
     }
     return I;
@@ -95,6 +94,8 @@ data {
   real<lower=0> tranSD[M]; // standard deviation
   real<lower=0> recMU; // mean recovery time
   real<lower=0> recSD; // standard deviation
+  real<lower=0> ConfirmMU; // expected proportion of cases confirmed
+  real<lower=0> ConfirmSD; // standard deviation
   
   // Population data
   real<lower=0> TotalPop; // total population size
@@ -106,8 +107,7 @@ data {
   // Historical data
   int<lower=0> Q; // number of observations
   real<upper=0> dat_ts[Q]; // time-stamps for historical data
-  real dat_tests[Q]; // unused
-  real dat_cases[Q]; // number of infections at times dat_ts
+  real<lower=0> dat_cases[Q]; // number of infections at times dat_ts
   real<lower=0> datSD; // confidence in data
   
 }
@@ -194,9 +194,13 @@ transformed data {
 parameters {
 
   real<lower=1> rec; // recovery time
-  real<lower=0> tran[M]; // Reproduction value (number new infections/case)
-  real<lower=0,upper=TotalPop/2> I0; // initial infected population
-  real<lower=0,upper=TotalPop/2> R0; // initial recovered population
+  real<lower=0,upper=TotalPop-2> I0; // initial infected population
+  real<lower=1,upper=TotalPop-I0-1> R0; // initial recovered population
+  
+  // tran must be large enough for the initial conditions I0,R0,rec to represent a physically possible outbreak
+  real<lower=TotalPop/(I0+R0)*(log(TotalPop)-log(TotalPop-I0-R0))> tran[M]; // Reproduction value (number new infections/case)
+
+  real ConfirmProportion; //logit parameter for proportion of cases confirmed
 
 }
 
@@ -211,36 +215,55 @@ transformed parameters {
 model {
   
   // back-cast initial conditions, and compare with observed data
-  real dat_I[Q,1];
   if( Q>0 ){
-    
+    real dat_I[Q,3];
     dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
     
-    for(i in 1:Q) dat_cases[i] ~ normal(dat_I[i,1],datSD);
+    for(i in 1:Q){
+      dat_cases[i] ~ normal( inv_logit(ConfirmProportion)*( TotalPop-dat_I[i,2]) ,datSD);
+    }
   }
   
   // priors
   rec ~ normal(recMU, recSD);
-  tran ~ normal(tranMU, tranSD);
+  for(i in 1:M) tran[i] ~ normal(tranMU[i], tranSD[i]) T[TotalPop/(I0+R0)*(log(TotalPop)-log(TotalPop-I0-R0)),];
   I0 ~ normal(I0MU,I0SD);
-  R0 ~ normal(R0MU,R0SD);
-  
+  R0 ~ normal(R0MU,R0SD) T[1,TotalPop-I0-1];
+  ConfirmProportion ~ normal(ConfirmMU,ConfirmSD);
 }
 
 generated quantities {
 
   // forecast and back-cast 
-  real dat_I[Q,1];
-  real I[N,1];
+  real FitCases[Q];
+  real FitI[Q];
+  real FitS[Q];
+  real FitR[Q];
+  real I[N];
+  real S[N];
+  real R[N];
   {
     if( Q>0 ){
       
+      real dat_I[Q,3];
       dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
+      for(i in 1:Q){
+        FitCases[i] = inv_logit(ConfirmProportion) * (TotalPop-dat_I[i,2]);
+        FitI[i] = dat_I[i,1];
+        FitS[i] = dat_I[i,2];
+        FitR[i] = dat_I[i,3];
+      }
       
     }
     if( N>0 ){
       
-      I = Forecast(I0,R0,ts_,endpts,ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,N,1);
+      real I_[N,3];
+      I_ = Forecast(I0,R0,ts_,endpts,ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,N,1);
+      for(i in 1:N){
+        I[i] = I_[i,1];
+        S[i] = I_[i,2];
+        R[i] = I_[i,3];
+      }
       
     }
   }
