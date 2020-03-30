@@ -1,0 +1,119 @@
+#####################################################################
+# Copyright 2020 AutonSystems, LLC
+#
+# Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#####################################################################
+
+library(ggplot2)
+library(rstan)
+rstan_options(auto_write=TRUE)
+
+# SOURCE: https://covidtracking.com/
+library(jsonlite)
+datdf <- fromJSON("https://covidtracking.com/api/states/daily")
+datdf = datdf[datdf$state=="NY",]
+
+dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
+dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
+dat_cases = as.integer(datdf$positive)
+idx = order(dat_ts); dat_ts=dat_ts[idx]; dat_cases=dat_cases[idx];
+TotalPop = 19440469 #NY
+Q = length(dat_ts)
+
+# outbreak priors
+tranMU = c(2.5) # mean Reproduction number (number new infections/case)
+tranSD = c(1.4) # standard deviation
+T0 = numeric(0)
+M = length(tranMU)
+
+# forecast time points
+ts = as.numeric(1:120)
+N = length(ts)
+
+data = list(
+  M=M,
+  tranMU=array(tranMU,dim=M),
+  tranSD=array(tranSD,dim=M),
+  T0=array(T0,dim=M-1),
+  recMU=14,
+  recSD=1,
+  I0MU=max(dat_cases),
+  I0SD=1e6,
+  R0MU=max(dat_cases),
+  R0SD=1e6,
+  N=N,
+  ts=array(ts,dim=N),
+  Q=Q,
+  dat_ts=array(dat_ts,dim=Q),
+  dat_cases=array(dat_cases,Q),
+  TotalPop=TotalPop,
+  datSD = 1000,
+  SevereMU = 0,
+  SevereSD = 2
+)
+
+fit <- stan(
+  file = "bayesSIRv1.1.stan",  
+  data = data,    
+  chains = 4,             # number of Markov chains
+  warmup = 1000,          # number of warmup iterations per chain
+  iter = 2000,            # total number of iterations per chain
+  cores = 4,               # number of cores (could use one per chain)
+  control = list(max_treedepth = 12)
+)
+
+probs0 = (5:48)/100 # posterior percentiles
+probs = c(probs0,0.5,rev(1-probs0))
+
+FitCases = summary(fit, pars = "FitCases", probs = probs)$summary
+FitCases = cbind(FitCases,dat_ts)  
+colnames(FitCases)[ncol(FitCases)] = "t"
+
+posteriorI = summary(fit, pars = "I", probs = probs)$summary
+posteriorI = cbind(posteriorI,ts)  
+colnames(posteriorI)[ncol(posteriorI)] = "t"
+######################################
+
+# Plot results
+####
+
+# plot forecast
+df = as.data.frame(posteriorI)
+# have to deal with the bad names from the summary 
+names(df)[names(df)%in%paste0(probs*100,"%")]=c(paste0("c",probs0*100,"l"),"c50",rev(paste0("c",probs0*100,"u")))
+# convert to % of total population
+df[,colnames(df)!="t"] = df[,colnames(df)!="t"]/data$TotalPop*100
+
+# now we're ready to plot
+p = ggplot(df)
+alpha = exp(seq(log(0.025),log(0.075),length.out=length(probs0)))
+for( pr in probs0*100 ) p=p+geom_ribbon(aes_string(x="t",ymin=paste0("c",pr,"l"),ymax=paste0("c",pr,"u")),alpha=alpha[pr],fill="red")
+p = p+geom_line(aes(x=t,y=c50),size=1)
+p = p+geom_line(aes(x=t,y=c25l),size=0.5,lty=2)
+p = p+geom_line(aes(x=t,y=c25u),size=0.5,lty=2)
+
+p=p+theme_minimal(36)+xlab("Day")+ylab("% of population")
+plot(p)
+
+# Plot fit to data
+df = as.data.frame(FitCases)
+names(df)[names(df)%in%paste0(probs*100,"%")]=c(paste0("c",probs0*100,"l"),"c50",rev(paste0("c",probs0*100,"u")))
+p = ggplot(df)
+alpha = exp(seq(log(0.025),log(0.075),length.out=length(probs0)))
+for( pr in probs0*100 ) p=p+geom_ribbon(aes_string(x="t",ymin=paste0("c",pr,"l"),ymax=paste0("c",pr,"u")),alpha=alpha[pr],fill="red")
+p = p+geom_line(aes(x=t,y=c50),size=1)
+p = p+geom_line(aes(x=t,y=c25l),size=0.5,lty=2)
+p = p+geom_line(aes(x=t,y=c25u),size=0.5,lty=2)
+p=p+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)
+p=p+theme_minimal(36)+xlab("Day")+ylab("Count of cases")
+plot(p)
+
+
