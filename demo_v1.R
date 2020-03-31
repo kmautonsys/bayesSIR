@@ -19,26 +19,26 @@ rstan_options(auto_write=TRUE)
 # SOURCE: https://covidtracking.com/
 library(jsonlite)
 datdf <- fromJSON("https://covidtracking.com/api/states/daily")
-datdf = datdf[datdf$state=="PA",]
+datdf = datdf[datdf$state=="MI",]
 
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
 dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
 dat_cases = as.integer(datdf$positive)
 idx = order(dat_ts); dat_ts=dat_ts[idx]; dat_cases=dat_cases[idx];
 #TotalPop = 19440469 #NY
-#TotalPop = 10045029 #MI
+TotalPop = 10045029 #MI
 #TotalPop = 39937489 #CA
-TotalPop = 12820878 #PA
+#TotalPop = 12820878 #PA
 Q = length(dat_ts)
 
 # outbreak priors
-tranMU = c(2.5) # mean Reproduction number (number new infections/case)
-tranSD = c(1.4) # standard deviation
-T0 = numeric(0)
+tranMU = c(2.5,2.5) # mean Reproduction number (number new infections/case)
+tranSD = c(1.4,1.4) # standard deviation
+T0 = c(-12) #numeric(0)
 M = length(tranMU)
 
 # forecast time points
-ts = as.numeric(1:120)
+ts = as.numeric(1:60)
 N = length(ts)
 
 data = list(
@@ -63,17 +63,90 @@ data = list(
   ConfirmSD = 2
 )
 
-fit <- stan(
-  file = "bayesSIRv1.1.stan",  
-  data = data,
-  chains = 4,             # number of Markov chains
-  warmup = 1000,          # number of warmup iterations per chain
-  iter = 2000,            # total number of iterations per chain
-  cores = 4,               # number of cores (could use one per chain)
-  control = list(max_treedepth = 12)
-)
+library(plyr)
+#############
+# MAP inference
+stanmodel = stan_model("bayesSIRv1.1.stan")
 
-probs0 = (5:48)/100 # posterior percentiles
+optim_ = lapply(1:500,function(i){ 
+  tryCatch({
+  opt = optimizing(stanmodel, data = data)
+  idx = grep("^I\\[[0-9]+\\]$",names(opt$par))
+  mxi = which.max(opt$par[idx])
+  mxv = opt$par[idx][mxi]
+  opt$mxi = mxi
+  opt$mxv = mxv
+  print(paste0(i,"  ",opt$value))
+  return(opt)
+  },error=function(e){ return(NULL) },warning=function(w){})
+})
+optim_ = optim_[-which(unlist(lapply(optim_,function(o) is.null(o))))]
+# coverage:
+optim2 = list(); optim=optim_
+for(i in 1:length(optim)){
+  p = unlist(lapply(1:length(optim),function(k) optim[[k]]$value))
+  j = which.max(p)
+  optim2[[length(optim2)+1]] = optim[[j]]
+  par_ = optim[[j]]$par[1:(5+M)] # include ConfirmProportion_, since ConfirmProportion is exponentiated
+  # drop similar
+  drop_idx = which(unlist(lapply(optim,function(o) max(abs(o$par[1:(5+M)]-par_)/par_)<0.05 )))
+  optim[drop_idx] = NULL
+  if(length(optim)==0) break
+}
+# coverage:
+best = list(); optim = optim2
+for(i in 1:length(optim)){
+  p = unlist(lapply(1:length(optim),function(k) optim[[k]]$value))
+  j = which.max(p)
+  best[[length(best)+1]] = optim[[j]]
+  mxi = optim[[j]]$mxi
+  mxv = optim[[j]]$mxv
+  # drop similar
+  drop_idx = which(unlist(lapply(optim,function(o) abs(o$mxi-mxi)<=1 & abs(o$mxv-mxv)<=TotalPop*0.01 )))
+  best[[length(best)]]$value = best[[length(best)]]$value+log(sum(exp(p[drop_idx]-best[[length(best)]]$value)))
+  optim[drop_idx] = NULL
+  if(length(optim)==0) break
+}
+v=unlist(lapply(best,function(o) o$value)); mx=max(v);
+best = best[which(unlist(lapply(best,function(o) o$value>mx+log(0.001) )))] # mx+log(tau) to keep samples with probability mass at least tau-% of the most likely point
+
+v=unlist(lapply(best,function(o) o$value)); mx=max(v);
+exp(v-mx)/sum(exp(v-mx))
+
+print(length(best))
+print(unlist(lapply(best,function(o) o$value)))
+print(best[[1]]$par[grep("^tran\\[[0-9]+\\]$",names(best[[1]]$par))])
+print(best[[1]]$par[grep("^rec$",names(best[[1]]$par))])
+print(best[[1]]$par[grep("^ConfirmProportion_$",names(best[[1]]$par))])
+#############
+df = ldply(best,function(opt){
+  idx = grep("^I\\[[0-9]+\\]$",names(opt$par))
+  return(data.frame(LogProb=opt$value,y=opt$par[idx],t=ts))
+})
+df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
+ggplot(df)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases")
+###
+df = ldply(best,function(opt){
+  idx = grep("^FitCases\\[[0-9]+\\]$",names(opt$par))
+  return(data.frame(LogProb=opt$value,y=opt$par[idx],t=dat_ts))
+})
+df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
+ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases")
+
+#############
+opt = best[[1]]
+init = Reduce(c,lapply(names(opt$par),function(n){ 
+  l = list(opt$par[n])
+  names(l)=n
+  return(l)
+}))
+hess_inv = solve(-optimizing(stanmodel, data = data, init=init, hessian=TRUE)$hessian)
+mu = sapply(1:nrow(hess_inv),function(i) init[[i]])
+
+samp = lapply(1:100,function(i) as.list(mvrnorm(n = 1, mu, hess_inv)))
+fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samp,chains=length(samp),warmup=0,iter=1,cores=1,algorithm="Fixed_param",refresh = 0)
+
+probs0 = (5:49)/100 # posterior percentiles
 probs = c(probs0,0.5,rev(1-probs0))
 
 FitCases = summary(fit, pars = "FitCases", probs = probs)$summary
@@ -103,6 +176,8 @@ p = p+geom_line(aes(x=t,y=c50),size=1)
 p = p+geom_line(aes(x=t,y=c25l),size=0.5,lty=2)
 p = p+geom_line(aes(x=t,y=c25u),size=0.5,lty=2)
 
+p = p+geom_line(data=data.frame(y=opt$par[grep("^I\\[[0-9]+\\]$",names(opt$par))]/TotalPop*100,t=ts),aes(x=t,y=y),col='blue',size=1) 
+
 p=p+theme_minimal(36)+xlab("Day")+ylab("% of population")
 plot(p)
 
@@ -116,7 +191,11 @@ p = p+geom_line(aes(x=t,y=c50),size=1)
 p = p+geom_line(aes(x=t,y=c25l),size=0.5,lty=2)
 p = p+geom_line(aes(x=t,y=c25u),size=0.5,lty=2)
 p=p+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)
+
+p = p+geom_line(data=data.frame(y=opt$par[grep("^FitCases\\[[0-9]+\\]$",names(opt$par))],t=dat_ts),aes(x=t,y=y),col='blue',size=1) 
+
 p=p+theme_minimal(36)+xlab("Day")+ylab("Count of cases")
 plot(p)
+
 
 
