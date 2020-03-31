@@ -1,66 +1,58 @@
 #!/usr/bin/env python3
 import pystan
 import numpy as np
+import json
+import requests
+import pandas as pd
 
-# day 0 corresponds to 2020-03-28
-dat = dict()
-dat["dat_ts"] =  [-24, -23, -22, -21, -20, -19, -18, -17, -16, -15, -14, -13, -12, -11, -10,  -9,  -8,  -7,  -6,  -5,  -4,  -3,  -2,  -1]
-dat["dat_cases"] = [6,    22,    33,    76,   105,   142,   173,   216,   216,   421,   524,   729,   950,  1700,  2382,  4152,  7102, 10356, 15168, 20875, 25665, 30811, 37258, 44635]
-dat["dat_tests"] = [54,   98,   125,  168,    197,    234,    265,    308,    308,   3200, 3303,   5272,   5493,   7206,  14597,  22284,  32427,  45437,  61401,  78289, 91270, 103479, 122104, 14575]
-dat["datSD"] = 100
-TotalPop  = 19440469
-
+r=requests.get("https://covidtracking.com/api/states/daily")
+state_data = pd.DataFrame(r.json())
+config = []
 # outbreak priors
-dat["tranMU"] = np.array([2.5]) # mean Reproduction number (number new infections/case)
-dat["tranSD"] = np.array([1.4]) # standard deviation
 
-dat["recMU"] = 14 # mean recovery time (days)
-dat["recSD"] = 1 # standard deviation
+def load_config(file,data):
+    config = dict()
+    with open(file) as f:
+        config = json.load(f)
 
-dat["SevereMU"] = 0.5; # mean proportion of COVID cases that are severe enough to garner testing
-dat["SevereSD"] = 0.25; # standard deviation
-dat["nonCOVIDMU"] = TotalPop*0.1 # mean number of nonCOVID cases that garner testing for COVID
-dat["nonCOVIDSD"] = 5e6 # standard deviation
-dat["ConfirmMU"] = 0
-dat["ConfirmSD"] = 2
+    #Adjust the data types
+    for key in config.keys():
+        if isinstance(config[key],list):
+            config[key] = np.array(config[key])
 
-dat["I0MU"] = max(dat["dat_cases"]) # mean current infected population
-dat["I0SD"] = 1e6 # standard deviation
-dat["R0MU"] = max(dat["dat_cases"]) # mean current recovered population
-dat["R0SD"] = 1e6 # standard deviation
+    # look up time series for the state
+    state = config['state']
+    state_data = data[data.state==state]
+    
+    config['dat_cases'] = np.flip(state_data.positive.values.astype('int'))
+    
+    config['dat_tests'] = np.flip(state_data.totalTestResults.values.astype('int'))
+    #config['dat_hospitalized'] = state_data.hospitalized.values.astype('int')
 
-dat["M"]  = len(dat["tranMU"])
-dat["Q"]  = len(dat["dat_ts"])
+    dat_ts = np.flip(np.array(state_data.date.values))
+    
+    config['dat_ts'] = dat_ts - np.max(dat_ts) -1
 
-dat["T0"] = np.array([])
-dat["TotalPop"] = TotalPop
+    config["TotalPop"] = 19440469 # this is new york specific
+    config["nonCOVIDMU"] = 0.1*config['TotalPop']
 
-# Forecast parameters
-ts = np.arange(1,120)
-N  = len(ts)#dat["ts"])
-dat["N"]  = N
-dat["ts"] = ts
+    #fill in the derived parameters
+    config["I0MU"] = max(config["dat_cases"]).astype('int') # mean current infected population
+    config["R0MU"] = max(config["dat_cases"]).astype('int') # mean current recovered population
 
-print(dat)
+    config["M"]  = len(config["tranMU"])
+    config["Q"]  = len(config["dat_ts"])
+    config["T0"] = np.array([])
+
+    # Forecast parameters
+    ts = 1+np.arange(config['N'])
+    config["ts"] = ts
+
+    config.pop('state',None)
+    return config
+
+
+dat = load_config('ny_conf.json',state_data)
 sm = pystan.StanModel(file="bayesSIRv1.1.stan")
 fit = sm.sampling(data=dat, iter=1000, chains=4)
 
-
-# if(N>0){
-#   posteriorI = summary(fit, pars = "I", probs = probs)$summary
-#   if(Q>0){
-#     posteriorDatI = summary(fit, pars = "dat_I", probs = probs)$summary
-#     posteriorI = rbind(posteriorDatI,posteriorI)
-#     posteriorI = cbind(posteriorI,c(dat_ts,ts))
-#   } else{
-#     posteriorI = cbind(posteriorI,ts)  
-#   }
-# } else {
-#   posteriorI = summary(fit, pars = "dat_I", probs = probs)$summary
-#   posteriorI = cbind(posteriorI,dat_ts)  
-# }
-# colnames(posteriorI)[ncol(posteriorI)] = "t"
-
-#if N>0:
-#    posterior = fit.summary()
-#    print(posterior)
