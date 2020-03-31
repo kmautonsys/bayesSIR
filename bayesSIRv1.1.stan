@@ -217,6 +217,7 @@ parameters {
 
 transformed parameters {
   
+  real ConfirmProportion_ =inv_logit(ConfirmProportion);
   real gamma = 1/rec;
   real beta[M];
   for( l in 1:M ) beta[l] = tran[l]/rec;
@@ -232,8 +233,11 @@ model {
     dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
     
     for(i in 1:Q){
-      real lambda = inv_logit(ConfirmProportion)*(a-dat_I[i,2]);
-      delta_cases[i] ~ normal( lambda ,sqrt(abs(lambda))+datSD);
+      real lambda = ConfirmProportion_*(a-dat_I[i,2]);
+      //real std = lambda>=0 ? sqrt(lambda)+datSD : datSD;
+      //delta_cases[i] ~ normal( lambda , std);
+      //real lambda = ConfirmProportion_*dat_I[i,1];
+      delta_cases[i] ~ poisson(lambda);
       a = dat_I[i,2];
     }
   }
@@ -258,14 +262,17 @@ generated quantities {
   real R[N];
   {
     if( Q>0 ){
-      
+      real a = TotalPop;
+      real b = 0;
       real dat_I[Q,3];
       dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
       for(i in 1:Q){
-        FitCases[i] = inv_logit(ConfirmProportion) * (TotalPop-dat_I[i,2]);
+        FitCases[i] = b + ConfirmProportion_ * (a-dat_I[i,2]);
         FitI[i] = dat_I[i,1];
         FitS[i] = dat_I[i,2];
         FitR[i] = dat_I[i,3];
+        a = dat_I[i,2];
+        b = FitCases[i];
       }
       
     }
