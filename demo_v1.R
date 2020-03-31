@@ -13,7 +13,6 @@
 #####################################################################
 
 library(ggplot2)
-library(MASS)
 library(rstan)
 rstan_options(auto_write=TRUE)
 
@@ -36,9 +35,13 @@ TotalPop = 19440469 #NY
 Q = length(dat_ts)
 
 # outbreak priors
-tranMU = c(2.5,2.5) # mean Reproduction number (number new infections/case)
-tranSD = c(1.4,1.4) # standard deviation
-T0 = c(-12) #numeric(0)
+#tranMU = c(2.5,2.5,2.5,2.5) # mean Reproduction number (number new infections/case)
+#tranSD = c(1.4,1.4,1.4,1.4) # standard deviation
+#T0 = c(-10.5,-7,-3.5) #numeric(0)
+
+T0 = seq(-14,-1,2)
+tranMU = rep(2.5,length(T0)+1)
+tranSD = rep(1.4,length(T0)+1)
 M = length(tranMU)
 
 # forecast time points
@@ -67,7 +70,9 @@ data = list(
   ConfirmMU = 0,
   ConfirmSD = 2,
   DeathMU = 0,
-  DeathSD = 2  
+  DeathSD = 2,
+  trendMU = 0,
+  trendSD = 0.1
 )
 
 library(plyr)
@@ -134,23 +139,7 @@ opt = best[[1]]
 # Can be SLOW
 fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=list(opt$par),chains=1,warmup=1000,iter=2000,cores=1)
 #############
-#OR
-##############
-# may be less correct?
-hess = -opt$hessian
-eig = eigen(hess,symmetric=TRUE)
-eig$values[eig$values<0]=0; eig$values[eig$values>0]=1/eig$values[eig$values>0]
-hess_inv = eig$vectors%*%diag(eig$values)%*%t(eig$vectors)
-mu = vpar(opt$par)
 
-samp = lapply(1:1000,function(i){ 
-  s = mvrnorm(n = 1, mu, hess_inv)
-  ret = lpar(s)
-  ret$logp=as.numeric(-0.5*t(s-mu)%*%hess_inv%*%(s-mu))
-  return(ret)
-  })
-fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samp,chains=length(samp),warmup=0,iter=1,cores=1,algorithm="Fixed_param",refresh = 0)
-######
 
 
 
