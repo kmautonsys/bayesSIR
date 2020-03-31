@@ -44,11 +44,11 @@ functions {
       theta[2] = time_reverse*beta_;
       y0[1] = log(S0/TotalPop);
       if(i==1){
-        S = integrate_ode_rk45(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
       } else if(ts[endpts[i-1]]<0) {
-        S = integrate_ode_rk45(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       } else {
-        S = integrate_ode_rk45(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_bdf(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       }
       for( k in 1:P ){
         int kk = i>1 ? endpts[i-1] : 0;
@@ -94,8 +94,10 @@ data {
   real<lower=0> tranSD[M]; // standard deviation
   real<lower=0> recMU; // mean recovery time
   real<lower=0> recSD; // standard deviation
-  real<lower=0> ConfirmMU; // expected proportion of cases confirmed
+  real ConfirmMU; // expected proportion of cases confirmed
   real<lower=0> ConfirmSD; // standard deviation
+  real DeathMU; // expected proportion of cases confirmed
+  real<lower=0> DeathSD; // standard deviation
   
   // Population data
   real<lower=0> TotalPop; // total population size
@@ -108,7 +110,8 @@ data {
   int<lower=0> Q; // number of observations
   real<upper=0> dat_ts[Q]; // time-stamps for historical data
   int<lower=0> dat_cases[Q]; // number of infections at times dat_ts
-  real<lower=0> datSD; // confidence in data
+  int<lower=0> dat_deaths[Q];
+  int<lower=0,upper=1> dat_deathNA[Q]; // 1 = dat_deaths[i] should be ignored.
   
 }
 
@@ -126,16 +129,20 @@ transformed data {
   int dat_endpts[M]; // endpoints of piece-wise periods
   
   int delta_cases[Q];
+  int delta_deaths[Q];
 
   // compute delta cases
   {// local variables
   int a=0;
+  int b=0;
   for(l in 1:Q){
     delta_cases[l] = dat_cases[l]-a;
+    delta_deaths[l] = dat_deaths[l] - b;
     a = dat_cases[l];
+    b = dat_deaths[l];
   }
   }
-  
+
   // Fill forward ODE time stamps
   if( N>0 ){// local variables
   int i;
@@ -165,7 +172,7 @@ transformed data {
     k=k+1;
   }
   }
-  
+
   // Fill backward ODE time stamps
   if( Q>0 ){// local variables
   int i;
@@ -199,25 +206,25 @@ transformed data {
     k=k+1;
   }
   }
-  
+
 }
 
 parameters {
 
+  real ConfirmProportion; //logit parameter for proportion of cases confirmed
+  real DeathProportion; //logit parameter for proportion of cases resulting in death
   real<lower=1> rec; // recovery time
   real<lower=0,upper=TotalPop-2> I0; // initial infected population
   real<lower=1,upper=TotalPop-I0-1> R0; // initial recovered population
   
   // tran must be large enough for the initial conditions I0,R0,rec to represent a physically possible outbreak
   real<lower=TotalPop/(I0+R0)*(log(TotalPop)-log(TotalPop-I0-R0))> tran[M]; // Reproduction value (number new infections/case)
-
-  real ConfirmProportion; //logit parameter for proportion of cases confirmed
-
 }
 
 transformed parameters {
   
-  real ConfirmProportion_ =inv_logit(ConfirmProportion);
+  real DeathProportion_ = inv_logit(DeathProportion);
+  real ConfirmProportion_ = inv_logit(ConfirmProportion);
   real gamma = 1/rec;
   real beta[M];
   for( l in 1:M ) beta[l] = tran[l]/rec;
@@ -225,20 +232,21 @@ transformed parameters {
 }
 
 model {
-  
+
   // back-cast initial conditions, and compare with observed data
   if( Q>0 ){
     real dat_I[Q,3];
     real a = TotalPop;
+    real b = 0;
     dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
     
     for(i in 1:Q){
-      real lambda = ConfirmProportion_*(a-dat_I[i,2]);
-      //real std = lambda>=0 ? sqrt(lambda)+datSD : datSD;
-      //delta_cases[i] ~ normal( lambda , std);
-      //real lambda = ConfirmProportion_*dat_I[i,1];
-      delta_cases[i] ~ poisson(lambda);
+      real lambda = ConfirmProportion_ * (a-dat_I[i,2]);
+      real lambda_death = DeathProportion_ * (dat_I[i,3]-b);
+      if(dat_deathNA[i]==0) target+=poisson_lpmf(delta_deaths[i]|lambda_death);
+      target+=poisson_lpmf(delta_cases[i]|lambda);
       a = dat_I[i,2];
+      b = dat_I[i,3];
     }
   }
   
@@ -248,26 +256,33 @@ model {
   I0 ~ normal(I0MU,I0SD);
   R0 ~ normal(R0MU,R0SD) T[1,TotalPop-I0-1];
   ConfirmProportion ~ normal(ConfirmMU,ConfirmSD);
+  DeathProportion ~ normal(DeathMU,DeathSD);
+  
 }
 
 generated quantities {
 
   // forecast and back-cast 
   real FitCases[Q];
+  real FitDeaths[Q];
   real FitI[Q];
   real FitS[Q];
   real FitR[Q];
+  real Deaths[N];
   real I[N];
   real S[N];
   real R[N];
   {
+
     if( Q>0 ){
       real a = TotalPop;
       real b = 0;
       real dat_I[Q,3];
       dat_I = Forecast(I0,R0,dat_ts_,dat_endpts,dat_ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q,-1);
       for(i in 1:Q){
-        FitCases[i] = b + ConfirmProportion_ * (a-dat_I[i,2]);
+        real lambda = ConfirmProportion_*(a-dat_I[i,2]);
+        FitCases[i] = b + lambda;
+        FitDeaths[i] = DeathProportion_ * dat_I[i,3];
         FitI[i] = dat_I[i,1];
         FitS[i] = dat_I[i,2];
         FitR[i] = dat_I[i,3];
@@ -281,6 +296,7 @@ generated quantities {
       real I_[N,3];
       I_ = Forecast(I0,R0,ts_,endpts,ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,N,1);
       for(i in 1:N){
+        Deaths[i] = DeathProportion_ * I_[i,3];
         I[i] = I_[i,1];
         S[i] = I_[i,2];
         R[i] = I_[i,3];
