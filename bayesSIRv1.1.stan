@@ -98,6 +98,8 @@ data {
   real<lower=0> ConfirmSD; // standard deviation
   real DeathMU; // expected proportion of cases confirmed
   real<lower=0> DeathSD; // standard deviation
+  real trendMU;
+  real<lower=0> trendSD;
   
   // Population data
   real<lower=0> TotalPop; // total population size
@@ -247,6 +249,13 @@ model {
       target+=poisson_lpmf(delta_cases[i]|lambda);
       a = dat_I[i,2];
       b = dat_I[i,3];
+    }
+  }
+  
+  if( M>1 ){
+    for(i in 2:M){
+      real d = tran[i]-tran[i-1];
+      d ~ normal( trendMU, trendSD );
     }
   }
   
