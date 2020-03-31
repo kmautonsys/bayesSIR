@@ -44,11 +44,11 @@ functions {
       theta[2] = time_reverse*beta_;
       y0[1] = log(S0/TotalPop);
       if(i==1){
-        S = integrate_ode_bdf(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_rk45(SIR, y0, 0, ts[1:endpts[i]], theta, x_r, x_i);
       } else if(ts[endpts[i-1]]<0) {
-        S = integrate_ode_bdf(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_rk45(SIR, y0, 0, ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       } else {
-        S = integrate_ode_bdf(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        S = integrate_ode_rk45(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
       }
       for( k in 1:P ){
         int kk = i>1 ? endpts[i-1] : 0;

@@ -1,0 +1,23 @@
+{
+    "state" : "NY",
+    "datSD" : 100,
+    "tranMU" : [2.5],
+    "tranSD" : [1.4], 
+
+    "recMU" : 14, 
+    "recSD" : 1, 
+
+    "SevereMU" : 0.5,
+    "SevereSD" : 0.25, 
+
+    "nonCOVIDSD" : 5e6,
+    "ConfirmMU" : 0,
+    "ConfirmSD" : 2,
+
+    "I0SD" : 1e6,
+    "R0SD" : 1e6,
+
+    "T0" : [],
+
+    "N"  : 119
+}

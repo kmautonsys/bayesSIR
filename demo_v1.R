@@ -14,21 +14,28 @@
 
 library(ggplot2)
 library(rstan)
+library(MASS)
 rstan_options(auto_write=TRUE)
 
 # SOURCE: https://covidtracking.com/
 library(jsonlite)
 datdf <- fromJSON("https://covidtracking.com/api/states/daily")
-datdf = datdf[datdf$state=="MI",]
+state="MI"
+datdf = datdf[datdf$state==state,]
 
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
 dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
 dat_cases = as.integer(datdf$positive)
 idx = order(dat_ts); dat_ts=dat_ts[idx]; dat_cases=dat_cases[idx];
 #TotalPop = 19440469 #NY
-TotalPop = 10045029 #MI
+#TotalPop = 10045029 #MI
 #TotalPop = 39937489 #CA
 #TotalPop = 12820878 #PA
+location <- fromJSON("https://coronadatascraper.com/locations.json")
+state_string = sprintf("%s, USA",state);
+state_data = location[location$name==state_string,]$population
+TotalPop = sum(state_data)
+
 Q = length(dat_ts)
 
 # outbreak priors
