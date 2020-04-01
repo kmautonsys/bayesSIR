@@ -32,14 +32,21 @@ TotalPop = 19440469 #NY
 #TotalPop = 10045029 #MI
 #TotalPop = 39937489 #CA
 #TotalPop = 12820878 #PA
+#TotalPop = 11747694 #OH
 Q = length(dat_ts)
 
 # outbreak priors
-#tranMU = c(2.5,2.5,2.5,2.5) # mean Reproduction number (number new infections/case)
-#tranSD = c(1.4,1.4,1.4,1.4) # standard deviation
-#T0 = c(-10.5,-7,-3.5) #numeric(0)
+tranMU = c(2.5) # mean Reproduction number (number new infections/case)
+tranSD = c(1.4) # standard deviation
+T0 = numeric(0)
+M = length(tranMU)
 
-T0 = seq(-14,-1,2)
+tranMU = c(2.5,2.5,2.5) # mean Reproduction number (number new infections/case)
+tranSD = c(1.4,1.4,1.4) # standard deviation
+T0 = c(-14,-7)
+M = length(tranMU)
+
+T0 = seq(-14,-3,3)
 tranMU = rep(2.5,length(T0)+1)
 tranSD = rep(1.4,length(T0)+1)
 M = length(tranMU)
@@ -54,11 +61,11 @@ data = list(
   tranSD=array(tranSD,dim=M),
   T0=array(T0,dim=M-1),
   recMU=14,
-  recSD=1,
-  I0MU=max(dat_cases),
-  I0SD=1e6,
-  R0MU=max(dat_cases),
-  R0SD=1e6,
+  recSD=0.1,
+  I0MU=1,
+  I0SD=10,
+  R0MU=1,
+  R0SD=10,
   N=N,
   ts=array(ts,dim=N),
   Q=Q,
@@ -67,10 +74,10 @@ data = list(
   dat_deaths=array(dat_deaths,dim=Q),
   dat_deathNA=array(dat_deathNA*1,dim=Q), # NA deaths should be forward-filled
   TotalPop=TotalPop,
-  ConfirmMU = 0,
-  ConfirmSD = 2,
-  DeathMU = 0,
-  DeathSD = 2,
+  ConfirmMU = -4,
+  ConfirmSD = 1.5,
+  DeathMU = -5,
+  DeathSD = 1.5,
   trendMU = 0,
   trendSD = 0.1
 )
@@ -80,16 +87,17 @@ library(plyr)
 # MAP inference
 vpar = function(par) c(par$ConfirmProportion,par$DeathProportion,par$rec,par$I0,par$R0,par$tran)
 lpar = function(par) list(ConfirmProportion=par[1],DeathProportion=par[2],rec=par[3],I0=par[4],R0=par[5],tran=par[6:(6+M-1)])
+
 stanmodel = stan_model("bayesSIRv1.1.stan")
 
-optim_ = lapply(1:500,function(i){ 
+optim_ = lapply(1:100,function(i){ 
   tryCatch({
-  opt = optimizing(stanmodel, data = data, hessian=TRUE, as_vector=FALSE)
+  opt = optimizing(stanmodel, data = data, hessian=TRUE, as_vector=FALSE,iter=750)
   mxi = which.max(opt$par$I)
   mxv = opt$par$I[mxi]
   opt$mxi = mxi
   opt$mxv = mxv
-  print(paste0(i,"  ",opt$value))
+  print(paste0(i,"  ",opt$value,"  ",opt$return_code))
   return(opt)
   },error=function(e){ return(NULL) },warning=function(w){})
 })
@@ -109,12 +117,19 @@ for(i in 1:length(optim)){
 best = optim2
 
 v=unlist(lapply(best,function(o) o$value)); mx=max(v);
-best = best[which(unlist(lapply(best,function(o) o$value>mx+log(0.001) )))] # mx+log(tau) to keep samples with probability mass at least tau-% of the most likely point
+best = best[which(unlist(lapply(best,function(o) o$value>mx+log(0.01) )))] # mx+log(tau) to keep samples with probability mass at least tau-% of the most likely point
 v=unlist(lapply(best,function(o) o$value)); mx=max(v);
 exp(v-mx)/sum(exp(v-mx))
 
 print(length(best))
 print(unlist(lapply(best,function(o) o$value)))
+
+opt = best[[1]]; p=c(opt$par$FitS,opt$par$S)+c(opt$par$FitI,opt$par$I)+c(opt$par$FitR,opt$par$R)
+c(min(p-TotalPop),max(p-TotalPop))
+x=c(opt$par$FitS,opt$par$S);c(min(x),max(x))/TotalPop
+x=c(opt$par$FitI,opt$par$I);c(min(x),max(x))/TotalPop
+x=c(opt$par$FitR,opt$par$R);c(min(x),max(x))/TotalPop
+
 print(best[[1]]$par$tran)
 print(best[[1]]$par$rec)
 print(best[[1]]$par$ConfirmProportion_)
@@ -122,15 +137,15 @@ print(best[[1]]$par$DeathProportion_)
 #############
 df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$I,t=ts))
 df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
-ggplot(df)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases")
+ggplot(df)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
 ###
 df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$FitCases,t=dat_ts))
 df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
-ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases")
+ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
 ###
 df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$FitDeaths,t=dat_ts))
 df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
-ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_deaths),aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases")
+ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_deaths)[dat_deathNA==0,],aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
 #############
 opt = best[[1]]
 
