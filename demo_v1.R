@@ -49,7 +49,7 @@ tranSD = c(1.4,1.4,1.4) # standard deviation
 T0 = c(-14,-7)
 M = length(tranMU)
 
-T0 = seq(-14,-3,1)
+T0 = seq(-14,-3,3)
 tranMU = rep(2.5,length(T0)+1)
 tranSD = rep(1.4,length(T0)+1)
 M = length(tranMU)
