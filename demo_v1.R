@@ -19,19 +19,22 @@ rstan_options(auto_write=TRUE)
 # SOURCE: https://covidtracking.com/
 library(jsonlite)
 datdf <- fromJSON("https://covidtracking.com/api/states/daily")
-datdf = datdf[datdf$state=="NY",]
+datdf = datdf[datdf$state=="PA",]
 
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
 dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
 dat_cases = as.integer(datdf$positive)
+dat_hospitalizations = as.integer(datdf$hospitalized)
 dat_deaths = as.integer(datdf$death)
-idx = order(dat_ts); dat_ts=dat_ts[idx]; dat_cases=dat_cases[idx]; dat_deaths=dat_deaths[idx];
+idx = order(dat_ts); dat_ts=dat_ts[idx]; dat_cases=dat_cases[idx]; dat_hospitalizations=dat_hospitalizations[idx]; dat_deaths=dat_deaths[idx];
+dat_hospNA = is.na(dat_hospitalizations)
+dat_hospitalizations[dat_hospNA] = 0
 dat_deathNA = is.na(dat_deaths)
 dat_deaths[dat_deathNA] = 0
 TotalPop = 19440469 #NY
 #TotalPop = 10045029 #MI
 #TotalPop = 39937489 #CA
-#TotalPop = 12820878 #PA
+TotalPop = 12820878 #PA
 #TotalPop = 11747694 #OH
 Q = length(dat_ts)
 
@@ -71,6 +74,8 @@ data = list(
   Q=Q,
   dat_ts=array(dat_ts,dim=Q),
   dat_cases=array(dat_cases,dim=Q),
+  dat_hospitalizations=array(dat_hospitalizations,dim=Q),
+  dat_hospNA=array(dat_hospNA*1,dim=Q), # NA deaths should be forward-filled
   dat_deaths=array(dat_deaths,dim=Q),
   dat_deathNA=array(dat_deathNA*1,dim=Q), # NA deaths should be forward-filled
   TotalPop=TotalPop,
@@ -78,15 +83,17 @@ data = list(
   ConfirmSD = 1.5,
   DeathMU = -5,
   DeathSD = 1.5,
+  HospMU=5,
+  HospSD = 1.5,
   trendMU = 0,
-  trendSD = 0.1
+  trendSD = 0.05
 )
 
 library(plyr)
 #############
 # MAP inference
-vpar = function(par) c(par$ConfirmProportion,par$DeathProportion,par$rec,par$I0,par$R0,par$tran)
-lpar = function(par) list(ConfirmProportion=par[1],DeathProportion=par[2],rec=par[3],I0=par[4],R0=par[5],tran=par[6:(6+M-1)])
+vpar = function(par) c(par$ConfirmProportion,par$HospitalProportion,par$DeathProportion,par$rec,par$I0_,par$R0_,par$tran)
+lpar = function(par) list(ConfirmProportion=par[1],HospitalProportion=par[2],DeathProportion=par[3],rec=par[4],I0_=par[5],R0_=par[6],tran=par[7:(7+M-1)])
 
 stanmodel = stan_model("bayesSIRv1.1.stan")
 
@@ -133,6 +140,7 @@ x=c(opt$par$FitR,opt$par$R);c(min(x),max(x))/TotalPop
 print(best[[1]]$par$tran)
 print(best[[1]]$par$rec)
 print(best[[1]]$par$ConfirmProportion_)
+print(best[[1]]$par$HospitalProportion_)
 print(best[[1]]$par$DeathProportion_)
 #############
 df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$I,t=ts))
@@ -143,6 +151,10 @@ df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$FitCases,t=
 df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
 ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_cases),aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
 ###
+df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$FitHosp,t=dat_ts))
+df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
+ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_hospitalizations)[dat_hospNA==0,],aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
+###
 df = ldply(best,function(opt) data.frame(LogProb=opt$value,y=opt$par$FitDeaths,t=dat_ts))
 df$LogProb = as.character( match(df$LogProb, sort(unique(df$LogProb),decreasing=TRUE)) )
 ggplot(df)+geom_point(data=data.frame(t=dat_ts,y=dat_deaths)[dat_deathNA==0,],aes(x=t,y=y),size=2)+geom_line(aes(x=t,y=y,col=LogProb))+theme_minimal(12)+xlab("Day")+ylab("Count of cases") + theme(legend.position="none")
@@ -151,6 +163,21 @@ opt = best[[1]]
 
 
 #############
+# THIS -OR- THAT
+library(MASS)
+eig = eigen(-opt$hessian,symmetric=TRUE)
+eig$values[eig$values<0] = 0; eig$values[eig$values>0] = 1/eig$values[eig$values>0]
+Sigma = eig$vectors%*%diag(eig$values)%*%t(eig$vectors)
+mu = vpar(opt$par)
+samps=lapply(1:100,function(i){
+    c = 10;
+    s = mvrnorm(n=1,mu,Sigma*c)  
+    logprob = -0.5*t(s)%*%Sigma%*%(s)*c
+    s = lpar(s); s$logprob=logprob; return(s)
+})
+fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samps,chains=length(samps),warmup=0,iter=1,cores=1,algorithm="Fixed_param",refresh=0)
+#############
+# THAT
 # Can be SLOW
 fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=list(opt$par),chains=1,warmup=1000,iter=2000,cores=1)
 #############
