@@ -21,6 +21,7 @@ functions {
     real C1 = theta[3];
     //-g*y+bP*exp(y)- [ b*C0+g*ln(P) ]
     dydt[1] = -gamma*y[1]+beta*exp(y[1])-C1;
+    if(dydt[1]>0) dydt[1]=0;
     return dydt;
   }
 
@@ -45,38 +46,47 @@ functions {
       real beta_ = beta[i]*TotalPop/S0;
       int P = i>1 ? endpts[i]-endpts[i-1] : endpts[i];
       real S[P,1];
-      TotalPop_ = TotalPop-R0_;
-      C0 = I0_+S0-gamma/beta_*TotalPop_*log(S0/TotalPop_);
-      t1 = ts[endpts[i]];
-      theta[2] = beta_;
-      theta[3] = beta_/TotalPop_*C0;
-      y0[1] = log(S0/TotalPop_);
       if(!(I0_<=0 || S0<=0)){
-      if(i==1){
-        S = integrate_ode_rk45(SIR, y0, t0, ts[1:endpts[i]], theta, x_r, x_i);
-      } else {
-        S = integrate_ode_rk45(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
-      }
-      } else {
-        for(k in 1:P) S[k,1] = y0[1];
-      }
-      for( k in 1:P ){
-        int kk = i>1 ? endpts[i-1] : 0;
-        if( ts_is_output[kk+k]==0) continue;
-        I[j,2] = TotalPop_*exp(S[k,1]); // Susceptible population
-        //g*ln(P*exp(y))/b-P*exp(y)+C0
-        //g/b*y-P*exp(y)+C0+g/b*ln(P)
-        I[j,1] = gamma/beta_*TotalPop_*S[k,1]-I[j,2]+C0; // Infected population
-        if(I[j,1]<0) I[j,1]=0;
-        I[j,3] = R0_+TotalPop_ - (I[j,2] + I[j,1]); // Recovered population
+        TotalPop_ = TotalPop-R0_;
+        C0 = I0_+S0-gamma/beta_*TotalPop_*log(S0/TotalPop_);
+        t1 = ts[endpts[i]];
+        theta[2] = beta_;
+        theta[3] = beta_/TotalPop_*C0;
+        y0[1] = log(S0/TotalPop_);
+        if(i==1){
+          S = integrate_ode_rk45(SIR, y0, t0, ts[1:endpts[i]], theta, x_r, x_i);
+        } else {
+          S = integrate_ode_rk45(SIR, y0, ts[endpts[i-1]], ts[(endpts[i-1]+1):endpts[i]], theta, x_r, x_i);
+        }
+        for( k in 1:P ){
+          int kk = i>1 ? endpts[i-1] : 0;
+          if( ts_is_output[kk+k]==0) continue;
+          I[j,2] = TotalPop_*exp(S[k,1]); // Susceptible population
+          //g*ln(P*exp(y))/b-P*exp(y)+C0
+          //g/b*y-P*exp(y)+C0+g/b*ln(P)
+          I[j,1] = gamma/beta_*TotalPop_*S[k,1]-I[j,2]+C0; // Infected population
+          if(I[j,1]<0) I[j,1]=0;
+          I[j,3] = R0_+TotalPop_ - (I[j,2] + I[j,1]); // Recovered population
+          if(j>=N) break;
+          j = j + 1;
+        }
         if(j>=N) break;
-        j = j + 1;
+        S0 = TotalPop_*exp(S[P,1]);
+        I0_ = gamma/beta_*TotalPop_*S[P,1]-S0+C0;
+        R0_ = R0_+TotalPop_-S0-I0_;
+        if(I0_<0) I0_=0;
+      } else {
+        for( k in 1:P ){
+          int kk = i>1 ? endpts[i-1] : 0;
+          if( ts_is_output[kk+k]==0) continue;
+          I[j,2] = S0;
+          I[j,1] = I0_;
+          I[j,3] = R0_;
+          if(j>=N) break;
+          j = j + 1;
+        }
+        if(j>=N) break;
       }
-      if(j>=N) break;
-      S0 = TotalPop_*exp(S[P,1]);
-      I0_ = gamma/beta_*TotalPop_*S[P,1]-S0+C0;
-      R0_ = R0_+TotalPop_-S0-I0_;
-      if(I0_<0) I0_=0;
     }
     return I;
   }
@@ -122,6 +132,8 @@ data {
   int<lower=0> dat_deaths[Q];
   int<lower=0,upper=1> dat_deathNA[Q]; // 1 = dat_deaths[i] should be ignored.
   
+  int<lower=0,upper=1> fix_confirm; // if 1, use ConfirmProportion=ConfirmMU
+  
 }
 
 transformed data {
@@ -139,6 +151,8 @@ transformed data {
   int delta_deaths[Q];
   int dat_hospNA_[Q];
   int dat_deathNA_[Q];
+
+  real ConfirmMU_ = inv_logit(ConfirmMU);
 
   // compute delta cases
   {// local variables
@@ -229,7 +243,7 @@ model {
     real b = 0;
     real I_[Q,3] = Forecast(I0,R0,t0,ts_,endpts,ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,Q);
     for(i in 1:Q){
-      real lambda = ConfirmProportion_ * (a-I_[i,2]); // new infections
+      real lambda = (fix_confirm==0? ConfirmProportion_:ConfirmMU_) * (a-I_[i,2]); // new infections
       real lambda_hosp = HospitalProportion_ * (a-I_[i,2]); // new infections
       real lambda_death = DeathProportion_ * (I_[i,3]-b); // new resolved cases
       if(lambda<1e-50) lambda=1e-50;
@@ -265,50 +279,24 @@ model {
 generated quantities {
 
   // forecast and back-cast 
-  real FitCases[Q];
-  real FitHosp[Q];
-  real FitDeaths[Q];
-  real FitI[Q];
-  real FitS[Q];
-  real FitR[Q];
-  real Cases[N];
-  real Hosp[N];
-  real Deaths[N];
-  real I[N];
-  real S[N];
-  real R[N];
+  real Cases[Q+N];
+  real Hosp[Q+N];
+  real Deaths[Q+N];
+  real HospLoad[Q+N];
+  real I[Q+N];
+  real S[Q+N];
+  real R[Q+N];
   {
     real I_[N+Q,3] = Forecast(I0,R0,t0,ts_,endpts,ts_is_output,gamma,beta,TotalPop,x_r,x_i,M,N+Q);
     
-    real a = TotalPop;
-    real b = 0;
-    real c = 0;
-    if( Q>0 ){
-      for(i in 1:Q){
-        FitCases[i] = b + ConfirmProportion_*(a-I_[i,2]);
-        FitHosp[i] = c + HospitalProportion_*(a-I_[i,2]);
-        FitDeaths[i] = DeathProportion_ * I_[i,3];
-        FitI[i] = I_[i,1];
-        FitS[i] = I_[i,2];
-        FitR[i] = I_[i,3];
-        a = I_[i,2];
-        b = FitCases[i];
-        c = FitHosp[i];
-      }
-      
-    }
-    if( N>0 ){
-      
-      for(i in 1:N){
-        Cases[i] = ConfirmProportion_*(a-I_[Q+i,2]);
-        Hosp[i] = HospitalProportion_*I_[Q+i,1];
-        Deaths[i] = DeathProportion_ * I_[Q+i,3];
-        I[i] = I_[Q+i,1];
-        S[i] = I_[Q+i,2];
-        R[i] = I_[Q+i,3];
-        a = I_[Q+i,2];
-      }
-      
+    for(i in 1:(N+Q)){
+      Cases[i] = (fix_confirm==0? ConfirmProportion_:ConfirmMU_)*(TotalPop-I_[i,2]);
+      Hosp[i] = HospitalProportion_*(TotalPop-I_[i,2]);
+      HospLoad[i] = HospitalProportion_* I_[i,1];
+      Deaths[i] = DeathProportion_ * I_[i,3];
+      I[i] = I_[i,1];
+      S[i] = I_[i,2];
+      R[i] = I_[i,3];
     }
   }
 
