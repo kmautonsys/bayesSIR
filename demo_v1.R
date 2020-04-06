@@ -19,7 +19,7 @@ rstan_options(auto_write=TRUE)
 # SOURCE: https://covidtracking.com/
 library(jsonlite)
 datdf <- fromJSON("https://covidtracking.com/api/states/daily")
-datdf = datdf[datdf$state=="NY",]
+datdf = datdf[datdf$state=="AS",]
 
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
 dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
@@ -177,7 +177,7 @@ samps=lapply(1:100,function(i){
     logprob = -0.5*t(s)%*%Sigma%*%(s)*c
     s = lpar(s); s$logprob=logprob; return(s)
 })
-fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samps,chains=length(samps),warmup=0,iter=1,cores=1,algorithm="Fixed_param",refresh=0)
+fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samps,chains=length(samps),warmup=0,iter=1,cores=2,algorithm="Fixed_param",refresh=0)
 #############
 # THAT
 # Can be SLOW
