@@ -14,8 +14,12 @@
 
 functions {
   
+  real bnd_(real x, real l, real u){
+    return x>l ? (x<u?x:u) : l;
+  }
+  
   real SIR0(real y,real[] theta){
-    return -theta[1]*y+theta[2]*expm1(y)-theta[3];
+    return bnd_(-theta[1]*y+theta[2]*expm1(y)-theta[3], -50,0);
   }
 
   real[,] Forecast(real I0, real S0, data real[] ts, data int[] endpts, data int[] ts_is_output, real gamma, real[] beta, data int N){
