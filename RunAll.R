@@ -5,7 +5,35 @@ rstan_options(auto_write=TRUE)
 
 vpar = function(par) c(par$S0_,par$I0_,par$rec_,par$tran_,par$HospProp_,par$DeathProp_)
 lpar = function(par,M) list(S0_=par[1],I0_=par[2],rec_=par[3],tran_=par[4:(4+M-1)],HospProp_=par[4+M],DeathProp_=par[5+M])
+stantime = function(N,Q,M,dat_ts,ts,T0){
+  ts_ = numeric(N+Q+M-1);
+  ts_is_output = integer(N+Q+M-1);
+  endpts = integer(M);
+  
+  i=1;  j=1;  k=1;
+  while(!(i>(N+Q) && j>M-1)){
+    T_ = ifelse(j<=M-1, ifelse(T0[j]<ts[N],T0[j],ts[N]) , ts[N]);
+    t_ = ifelse(i<=Q, dat_ts[i] , ifelse(i<=(N+Q) , ts[i-Q] , ts[N]));
+    if(t_<T_){
+      ts_[k] = t_;
+      ts_is_output[k] = 1;
+      i=i+1;
+    } else {
+      ts_[k] = T_;
+      endpts[j] = k;
+      if(T_==t_) i=i+1;
+      if(T_==t_) ts_is_output[k] = 1;
+      j=j+1;
+    } 
+    k=k+1;
+  }
+  return(list(ts_=ts_,ts_is_output=ts_is_output,endpts=endpts))
+}
+
 stanmodel = stan_model("bayesSIRv1.1.stan")
+expose_stan_functions(stanmodel)
+
+
 
 StatePop = list(AL=4908621,AK=734002,AZ=7378494,AR=3038999,CA=39937489,CO=5845526,CT=3563077,DE=982895,DC=720687,FL=21992985,GA=10736059,HI=1412687,ID=1826156,IL=12659682,IN=6745354,IA=3179849,KS=2910357,KY=4499692,LA=4645184,ME=1345790,MD=6083116,MA=6976597,MI=10045029,MN=5700671,MS=2989260,MO=6169270,MT=1086759,NE=1952570,NV=3139658,NH=1371246,NJ=8936574,NM=2096640,NY=19440469,NC=10611862,ND=761723,OH=11747694,OK=3954821,OR=4301089,PA=12820878,PR=3032165,RI=1056161,SC=5210095,SD=903027,TN=6897576,TX=29472295,UT=3282115,VT=628061,VA=8626207,WA=7797095,WV=1778070,WI=5851754,WY=567025)
 # SOURCE: https://covidtracking.com/
@@ -16,7 +44,7 @@ states = unique(datdf_all$state)
 
 ret_all = lapply(states,function(state){ 
 ret_list = list()
-for(LAG in c(0,3,7,14,21)){
+for(LAG in c(0,3:14)){
   tryCatch({
 datdf = datdf_all[datdf_all$state==state,]
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
@@ -89,7 +117,7 @@ data = list(
 # MAP inference
 optim_ = lapply(1:50,function(i){ 
   tryCatch({
-    opt = optimizing(stanmodel, data = data, hessian=TRUE, as_vector=FALSE,iter=100)
+    opt = optimizing(stanmodel, data = data, hessian=TRUE, as_vector=FALSE,iter=200,algorithm="BFGS")
     Sys.sleep(0.01)
     mxi = which.max(opt$par$I)
     mxv = opt$par$I[mxi]
@@ -146,9 +174,30 @@ colMeans(m)
 qnorm(1-0.05/2)*sqrt(colMeans(m^2)-colMeans(m)^2)/sqrt(nrow(m))
 unlist(lapply(1:ncol(m),function(i) median(m[,i])))
 
+data.frame(m=colMeans(m),s=qnorm(1-0.05/2)*sqrt(colMeans(m^2)-colMeans(m)^2)/sqrt(nrow(m)),M=unlist(lapply(1:ncol(m),function(i) median(m[,i]))))
+
 save(list="ret_all",file="RetAllStates_dev.RData")
 
 
+for(i in 1:length(ret_all)){
+  if(length(ret_all[[i]])<2) next
+  for(j in 2:length(ret_all[[i]])){
+    d = ret_all[[i]][[j]]
+    datdf = datdf_all[datdf_all$state==d$state,]
+    dat_ts = rev( as.Date(as.character(datdf$date),"%Y%m%d") )
+    Q = d$data$Q
+    df = data.frame( date = dat_ts[(Q-d$LAG+1):Q],
+                     pred_cases = d$modes[[1]]$par$Cases[(Q-d$LAG+1):Q],
+                     pred_death = d$modes[[1]]$par$Deaths[(Q-d$LAG+1):Q])
+    fname = paste0("eval_v1/",d$state,"_",format(dat_ts[Q-d$LAG],"%Y%m%d"),".csv")
+    write.csv(df,fname,row.names=FALSE,quote=FALSE)
+    pars = d$modes[[1]]$par[c("S0","I0","gamma","tran","HospitalProportion","DeathProportion")]
+    pars=unlist(pars)
+    fname = paste0("eval_v1/pars_",d$state,"_",format(dat_ts[Q-d$LAG],"%Y%m%d"),".csv")
+    df = data.frame(Parameter=names(pars),Value=pars)
+    write.csv(df,fname,row.names=FALSE,quote=FALSE)
+  }
+}
 
 st=0
 
@@ -188,11 +237,13 @@ ggplot(df)+geom_point(data=data.frame(t=data$dat_ts,y=data$dat_deaths)[data$dat_
 #############
 #############
 #############
-probs0 = (5:49)/100 # posterior percentiles
+probs0 = c(2.5,25)/100 #(5:49)/100 # posterior percentiles
 probs = c(probs0,0.5,rev(1-probs0))
 t = c(data$dat_ts,data$ts)
 #############
 posteriorI = NULL; FitCases=NULL
+tm = stantime(data$N,data$Q,data$M,data$dat_ts,data$ts,data$T0)
+
 library(MASS)
 for(k in 1:length(best)){
   opt=best[[k]]
@@ -200,23 +251,42 @@ for(k in 1:length(best)){
   eig$values[eig$values<0] = 0; eig$values[eig$values>0] = 1/eig$values[eig$values>0]
   Sigma = eig$vectors%*%diag(eig$values)%*%t(eig$vectors)
   mu = vpar(opt$par)
-  samps=lapply(1:1,function(i){
+  samps=lapply(1:100,function(i){
     s = mvrnorm(n=1,mu,Sigma)  
     s_ = lpar(s,data$M);
-    if(s_$S0_<0) s_$S0_=0
+    if(s_$S0_<1e-9) s_$S0_=1e-9
     if(s_$S0_>log(data$TotalPop)) s_$S0_=log(data$TotalPop)
-    if(s_$I0_<0) s_$I0_=0
+    if(s_$I0_<1e-9) s_$I0_=1e-9
     if(s_$I0_>s_$S0_) s_$I0_=s_$S0_
-    return(s_)
+    
+    S0 = exp(s_$S0_);
+    I0 = exp(s_$I0_);
+    gamma = 1.0/exp(s_$rec_);
+    beta = exp(s_$tran_)*gamma;
+    HospitalProportion = 1/(1+exp(-s_$HospProp_));
+    DeathProportion = 1/(1+exp(-s_$DeathProp_));
+    
+    # Forecast returns a list(len=data$N) of vectors(len=2)
+    FC = Forecast(I0,S0,tm$ts_,tm$endpts,tm$ts_is_output,gamma,beta,data$N+data$Q)
+    FC = matrix(unlist(FC),ncol=2,byrow=TRUE) # columns [I,S]
+    Cases = S0-FC[,2];
+    Hosp = HospitalProportion*Cases;
+    HospLoad = HospitalProportion* FC[,1];
+    Deaths = DeathProportion * (Cases - (FC[,1]-I0));
+    
+    return(list(IR=FC,Cases=Cases,Hosp=Hosp,HospLoad=HospLoad,Deaths=Deaths))
   })
-  fit <- stan(file = "bayesSIRv1.1.stan",data=data,init=samps,chains=length(samps),warmup=0,iter=1,cores=1,algorithm="Fixed_param",refresh=0)
-  posteriorI_ = summary(fit, pars = "I", probs = probs)$summary
+  posteriorI_ = Reduce(cbind,lapply(samps,function(s) s$IR[,1]))
+  posteriorI_ = Reduce(rbind,lapply(1:nrow(posteriorI_),function(t) quantile(posteriorI_[t,],probs=probs)))
+  FitCases_ = Reduce(cbind,lapply(samps,function(s) s$Cases))
+  FitCases_ = Reduce(rbind,lapply(1:nrow(FitCases_),function(t) quantile(FitCases_[t,],probs=probs)))
+  
   posteriorI_ = cbind(posteriorI_,t); posteriorI_=cbind(posteriorI_,rep(k,nrow(posteriorI_)))
   posteriorI_ = cbind(posteriorI_,opt$par$I);
   colnames(posteriorI_)[(ncol(posteriorI_)-2):ncol(posteriorI_)] = c("t","idx","mode")
   if(is.null(posteriorI)){ posteriorI=posteriorI_
   }else{ posteriorI = rbind(posteriorI,posteriorI_)}
-  FitCases_ = summary(fit, pars = "Cases", probs = probs)$summary
+  
   FitCases_ = cbind(FitCases_,t); FitCases_=cbind(FitCases_,rep(k,nrow(FitCases_)))
   FitCases_ = cbind(FitCases_,opt$par$Cases);
   colnames(FitCases_)[(ncol(FitCases_)-2):ncol(FitCases_)] = c("t","idx","mode")
