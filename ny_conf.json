@@ -1,23 +1,37 @@
 {
     "state" : "NY",
-    "datSD" : 100,
-    "tranMU" : [2.5],
-    "tranSD" : [1.4], 
 
-    "recMU" : 14, 
-    "recSD" : 1, 
+    "tranMU" : [2.5,2.5,2.5],
+    "tranSD" : [1.4,2.5,2.5], 
+
+    "recMU" : 14.0, 
+    "recSD" : 1.0, 
 
     "SevereMU" : 0.5,
     "SevereSD" : 0.25, 
-
+    
     "nonCOVIDSD" : 5e6,
-    "ConfirmMU" : 0,
-    "ConfirmSD" : 2,
+    "ConfirmMU" : 0.0,
+    "ConfirmSD" : 2.0,
 
-    "I0SD" : 1e6,
-    "R0SD" : 1e6,
+    "DeathMU" : 0.0,
+    "DeathSD" : 1.5,
 
-    "T0" : [],
+    "trendMU" : 0,
+    "trendSD" : 0.1,
 
-    "N"  : 119
+    "HospMU"  : -3.0,
+    "HospSD"  : 1.0,
+    
+    "I0MU" : 0.0,
+    "I0SD" : 10.0,
+
+    "S0SD" : 10.0,
+
+    "datSD" : 100,
+    
+    "T0" : [-14.0,-7.0],
+
+    "N"  : 119,
+    "phi" : -1.0
 }
