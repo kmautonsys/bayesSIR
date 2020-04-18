@@ -19,7 +19,7 @@ rstan_options(auto_write=TRUE)
 # SOURCE: https://covidtracking.com/
 library(jsonlite)
 datdf <- fromJSON("https://covidtracking.com/api/states/daily")
-datdf = datdf[datdf$state=="NY",]
+datdf = datdf[datdf$state=="AS",]
 
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
 dat_ts = as.numeric(dat_ts-(max(dat_ts)+1))
