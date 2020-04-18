@@ -1,6 +1,11 @@
-library(rstan)
-library(plyr)
-library(zoo)
+
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(rstan, jsonlite, openxlsx, plyr, zoo, MASS, curl,git2r)
+
+#library(rstan)
+#library(plyr)
+#library(zoo)
 rstan_options(auto_write=TRUE)
 
 vpar = function(par) c(par$S0_,par$I0_,par$rec_,par$tran_,par$HospProp_,par$DeathProp_)
@@ -33,18 +38,19 @@ stantime = function(N,Q,M,dat_ts,ts,T0){
 stanmodel = stan_model("bayesSIRv1.1.stan")
 expose_stan_functions(stanmodel)
 
-
-
-StatePop = list(AL=4908621,AK=734002,AZ=7378494,AR=3038999,CA=39937489,CO=5845526,CT=3563077,DE=982895,DC=720687,FL=21992985,GA=10736059,HI=1412687,ID=1826156,IL=12659682,IN=6745354,IA=3179849,KS=2910357,KY=4499692,LA=4645184,ME=1345790,MD=6083116,MA=6976597,MI=10045029,MN=5700671,MS=2989260,MO=6169270,MT=1086759,NE=1952570,NV=3139658,NH=1371246,NJ=8936574,NM=2096640,NY=19440469,NC=10611862,ND=761723,OH=11747694,OK=3954821,OR=4301089,PA=12820878,PR=3032165,RI=1056161,SC=5210095,SD=903027,TN=6897576,TX=29472295,UT=3282115,VT=628061,VA=8626207,WA=7797095,WV=1778070,WI=5851754,WY=567025)
-# SOURCE: https://covidtracking.com/
 library(jsonlite)
-datdf_all <- fromJSON("https://covidtracking.com/api/states/daily")
-states = unique(datdf_all$state)
 
+popdf = fromJSON("state_populations.json")
+# StatePop = list(AL=4908621,AK=734002,AZ=7378494,AR=3038999,CA=39937489,CO=5845526,CT=3563077,DE=982895,DC=720687,FL=21992985,GA=10736059,HI=1412687,ID=1826156,IL=12659682,IN=6745354,IA=3179849,KS=2910357,KY=4499692,LA=4645184,ME=1345790,MD=6083116,MA=6976597,MI=10045029,MN=5700671,MS=2989260,MO=6169270,MT=1086759,NE=1952570,NV=3139658,NH=1371246,NJ=8936574,NM=2096640,NY=19440469,NC=10611862,ND=761723,OH=11747694,OK=3954821,OR=4301089,PA=12820878,PR=3032165,RI=1056161,SC=5210095,SD=903027,TN=6897576,TX=29472295,UT=3282115,VT=628061,VA=8626207,WA=7797095,WV=1778070,WI=5851754,WY=567025)
+# SOURCE: https://covidtracking.com/
+
+datdf_all <- fromJSON("https://covidtracking.com/api/states/daily")
+#states = unique(datdf_all$state)
+states = c('NY','NJ','PA','MD')
 
 ret_all = lapply(states,function(state){ 
 ret_list = list()
-for(LAG in c(0,3:14)){
+for(LAG in c(0)){
   tryCatch({
 datdf = datdf_all[datdf_all$state==state,]
 dat_ts = as.Date(as.character(datdf$date),"%Y%m%d")
@@ -83,6 +89,8 @@ T0 = seq(-14,-3,2)
 T0 = T0[T0< -LAG-3]
 M = length(T0)+1
 
+StatePop = as.numeric(popdf[state])
+
 data = list(
   M=M,
   T0=array(T0,dim=M-1),
@@ -96,14 +104,14 @@ data = list(
   dat_hospNA=array(dat_hospNA*1,dim=Q), # NA deaths should be forward-filled
   dat_deaths=array(dat_deaths,dim=Q),
   dat_deathNA=array(dat_deathNA*1,dim=Q), # NA deaths should be forward-filled
-  TotalPop=StatePop[[state]],
+  TotalPop= StatePop,
   tranMU=array(log(2.5),dim=M),
   tranSD=array(1.0,dim=M),
   recMU=log(14),
   recSD=0.1,
   I0MU=0,
   I0SD=10,
-  S0MU=log(0.5*StatePop[[state]]),
+  S0MU=log(0.5*StatePop),
   S0SD=10,
   HospMU=-3,
   HospSD = 1,
@@ -157,7 +165,7 @@ ret_list[[length(ret_list)+1]] = list(LAG=LAG,modes=best,data=data,state=state)
 return(ret_list)
 })
 
-idx = which(5==unlist(lapply(ret_all,function(r) length(r))))
+idx = which(1==unlist(lapply(ret_all,function(r) length(r))))
 ret_all_ = ret_all[idx]
 m =Reduce(rbind,lapply(ret_all_,function(r){
   dat_cases = r[[1]]$data$dat_cases
